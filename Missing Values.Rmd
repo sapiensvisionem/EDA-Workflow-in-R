@@ -1,0 +1,264 @@
+---
+title: "Missing Values"
+author: "Ji Hun Lee"
+date: "May 24, 2020"
+output: html_document
+---
+
+#### Import Libraries
+
+```{r message=FALSE}
+library(VIM) # tropical atmospheric ocean data
+library(mice) # multivariate imputation by chained equations
+library(DMwR) # centralImputation, knnImputation, manyNAs
+library(tidyverse) # data wrangling operations
+library(fivethirtyeight) # biopics dataset
+```
+
+# Why Missing Data is a Problem
+
+Models cannot understand missing values. Without appropriate remedies, we have to resort removing the rows containing NA value, and this can create bias in our model.
+
+# Why Missing Data Happen
+
+1. Nonresponse in surveys
+
+2. Technical issues with data collecting equipment
+
+3. Joining data from difference sources 
+
+# Example Datasets
+
+```{r}
+data(tao) # Tropical Atmosphere Ocean
+data(biopics) # raw data from Straight Outta Compton
+data(airquality) # Daily air quality measurements in New York, May to September 1973
+```
+
+# Inspecting Missingness in Data
+
+Missing Data in R is encoded as NaN, NA, Inf. Replace empty string "", -1, #N/A, 'missing' with NA in R.
+
+Is there any missing data?
+```{r}
+any(is.na(tao)) # check for any NA in dataframe
+```
+
+How many rows with missing values?
+```{r}
+sum(is.na(tao)) # how many NA?
+```
+
+How many missing values does each column contain?
+```{r}
+colSums(is.na(tao)) # how many missing per column
+```
+
+Summary statistics of data:
+```{r}
+summary(tao)
+```
+
+Find dataframe without missing values:
+```{r warning=FALSE}
+ind <- which(is.na(tao)) # which rows contain NA?
+ind2 <- complete.cases(tao) # rows with no missing values
+tao[ind,] = na.omit(tao) # na.omit is the same as na.exclude()
+```
+
+Group missing values in column 1 by column 2
+```{r}
+# Calculate the number of missing values in air_temp per year
+tao %>% 
+  group_by(Year) %>% 
+  summarize(num_miss = sum(is.na(Air.Temp)))
+```
+
+# Types of Missingness
+
+There are three types of missingness.
+
+#### Missing Completely at Random: 
+Location of missing valuesin the dataset are completely random, they do not depend on any other data; reason for missingness is purely random.
+
+1. In a dataset containing school exam results, some children lack the result because they were ill and did not attend the test.
+
+2. While manually labeling the data, the labeler accidentally left some entries missing.
+
+3. A weather sensor is measuring temperature and sending the data to a database. There are some missing
+entries in the database for when the sensor broke down.
+
+#### Missing at Random: 
+If the reason for missingness can be explained by another variable, it's MAR.
+
+1. You are tracking your website visitors' location. If yhey are using a VPN, tracking is unrelaible and you often record missing values.
+
+2. In a healthy survey, you see missing data on weight. You suspect the values for the weight variable to be missing for one gender over another
+
+3.There are some missing temperature values in the database for when the sensor was switched offfor maintenance.As the maintenance team never work on the weekends,the locations of missing values depend on the day ofthe week.
+
+#### Missing Not at Random: 
+If the reason for missingness depends on the missing value itself, it's MNAR.
+
+1. It is know that far right supporters tend not to admit it in the election polls
+
+2. In surveys, rich people are more likely to not disclose their income
+
+3. When it's extremely cold,the weather sensor freezes and stops working. So, it does not record very low temperatures. Thus,the locations of missing values in the temperature variable depend on the values of this variable themselves.
+
+# Testing Missingness
+
+We can test the type of missingness and visualize patterns of missingness with graphs (aggregation plot, spine plot, mosaic plot).
+
+### t-test
+
+t.test to check the null hypothesis MCAR by comparing the mean of two groups
+```{r}
+# Create a dummy variable for missing earnings
+biopics <- biopics %>% 
+  mutate(missing_earnings = is.na(box_office))
+
+# Pull the missing earnings dummy for males
+missing_earnings_males <- biopics %>% 
+  filter(subject_sex == 'Male') %>% 
+  pull(missing_earnings)
+
+# Pull the missing earnings dummy for females
+missing_earnings_females <- biopics %>% 
+  filter(subject_sex == 'Female') %>% 
+  pull(missing_earnings)
+
+# Run the t-test
+t.test(missing_earnings_males,missing_earnings_females)
+```
+
+### Problem with t-test:
+
+1. Detecting missing data patterns with statistical tests can be cumbersome.
+
+2. t-test comes with many assumtions about data.
+
+3. Inferences based upon p-values are prone to problems (choosing significance level and p-hacking).
+
+### Aggregation plot
+
+The aggregation plot provides the answer to the basic question one may ask about an incomplete dataset: in which combinations of variables the data are missing, and how often? It is very useful for gaining a high-level overview of the missingness patterns. For example, it makes it immediately visible if there is some combination of variables that are often missing together, which might suggest some relation between them.
+```{r}
+# Draw an aggregation plot of biopics
+biopics %>% 
+	aggr(combined = TRUE, numbers = TRUE)
+```
+
+### Margin Plot
+
+```{r}
+marginplot(tao[,c("Air.Temp", "Humidity")])
+```
+
+### Spine Plot
+
+If you are interested in the interaction between specific variables, a spine plot is the way to go. It allows you to study the percentage of missing values in one variable for different values of the other, which is conceptually very similar to the t-tests.
+```{r}
+spineMiss(tao[, c("Air.Temp", "Humidity")])
+```
+
+Interpretation:
+
+1. When the main subject is African, we are the most likely to have complete earnings information.
+2. As far as earnings and sub_race are concerned, the data seem to be MAR. The spine plot shows that the percentage of missing data in earnings differs quite strongly for different categories of sub_race, which makes it look like MAR.
+3. The race that appears most rarely in the data has around 20% of earnings missing.
+
+### Mosaic Plot
+
+The spine plot allows you to study missing data patterns between two variables at a time. This idea is generalized to more variables in the form of a mosaic plot.
+First, start by creating a dummy variable indicating whether the United States was involved in the production of each movie. To do this, you will use the grepl() function, which checks if the string passed as its first argument is present in the object passed as its second argument. Then, draw a mosaic plot to see if the subject's gender correlates with the amount of missing data on earnings for both US and non-US movies.
+```{r}
+# Prepare data for plotting and draw a mosaic plot
+biopics %>%
+	# Create a dummy variable for US-produced movies
+	mutate(is_US_movie = grepl('US', country)) %>%
+	# Draw mosaic plot
+	mosaicMiss(highlight = 'box_office', 
+             plotvars = c('is_US_movie', 'subject_sex')) # remembering to pass variable names as stings.
+```
+
+Before you expand the output, notice how, for non-US movies, there is less missing data on earnings for movies featuring females. This doesn't look MCAR! 
+
+# Imptation
+
+Imputation is making an educated guess about what missing values may be.
+
+# Donor-Based Imputation Methods
+
+Missing values are filled in using other complete observations (they donate their data to missing values).
+
+1. Mean-Based: 
+
+Mean imputation can sometimes work for time series, but should be careful on cross-sectional data because it destroys relationship between variables and provides no variance to data
+```{r}
+tao_imp <- tao %>% 
+  # Create a binary indicator for missing values in air_temp
+  mutate(air_temp_imp = as.logical(ifelse(is.na(Air.Temp), 'TRUE', 'FALSE'))) %>% 
+  # Impute air_temp with its mean
+  mutate(Air.Temp = ifelse(is.na(Air.Temp), mean(Air.Temp, na.rm = TRUE), Air.Temp))
+head(tao_imp, 5)
+```
+
+Upon examining the tao data, you might have noticed that it also contains a variable called sea_surface_temp, which could reasonably be expected to be positively correlated with air_temp. If that's the case, you would expect these two temperatures to be both high or both low at the same time. Imputing mean air temperature when the sea temperature is high or low would break this relation.
+```{r}
+# Draw a margin plot of air_temp vs sea_surface_temp
+tao_imp %>% 
+  select(Air.Temp, Sea.Surface.Temp, air_temp_imp) %>%
+  marginplot(delimiter = '_imp')
+marginplot(tao_imp[,c('Air.Temp', 'Sea.Surface.Temp', 'air_temp_imp')], delimiter = '_imp')
+```
+
+The imputed values are located in the space where there is no observed data, which makes them outliers.
+All the imputed air_temp values are the same, no matter the sea_surface_temp. This breaks the correlation between these two variables.
+The variance of the imputed data differs from the one of observed data.
+
+- assess imputation quality by marginplot from VIM package: imputed vs original data:
+- after imputing, positive correlation is weaker - produce biased result
+```{r}
+# Calculate the number of missing values in air_temp per year
+tao %>% 
+  group_by(Year) %>% 
+  summarize(num_miss = sum(is.na(Air.Temp)))
+```
+
+The data come from two different years, and the vast majority of missing values are in the later year. If the average temperature changes over time, then imputing the missing values that are mostly from 1997 with the 1993-1997 average could break their relation with other, possibly correlated variables, such as sea_surface_temp
+
+- less variance -> increase standard error
+- median can be good in the case of outlier
+
+2. Hot-deck
+
+3. KNN
+
+```{r}
+# knnOutput <- knnImputation(mydata)
+# benefit: non-parametric, flexible with categorical and numeric
+# cost: costly 
+```
+
+```{r}
+# imputation by mode introduces bias
+# imputation by mean introduces variance
+
+
+
+# Numeric Variable:
+# 1. Linear Regression
+# 2. Random Forest
+# 3. MCMC
+
+# Categorical variable:
+# 1. Logistic Regression
+# 2. ANOVA
+# 3. KNN
+# 4. MICE
+# mice
+``` 
+
+# Model-Based
+sing statistical or ML models 
